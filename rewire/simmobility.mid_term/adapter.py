@@ -307,7 +307,7 @@ def publish(lake_root, sim_dir, scenario: str = "baseline", params: dict | None 
     from spine import transform as T
     from spine.lake import Lake
 
-    started = dt.datetime.now(dt.UTC)
+    started = dt.datetime.now(dt.timezone.utc)
     lake, sim = Lake(lake_root), Path(sim_dir)
     desc = T.load_descriptor(Path(__file__).with_name("transform.yaml"))
     params = T.resolve_params(desc, params)
