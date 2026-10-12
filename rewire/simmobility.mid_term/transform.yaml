@@ -1,0 +1,85 @@
+id: simmobility.mid_term
+version: 0.1.0
+kind: transform
+title: SimMobility Mid-Term (MIT/SMART) - activity-based demand + mesoscopic supply, run externally
+description: >
+  Descriptor + mapping only. SimMobility Mid-Term is a C++ simulator that reads its road network, zones and
+  population from a PostgreSQL schema via stored procedures (dev/Basic/data/simrun_MidTerm.xml) and writes CSV
+  statistics. It is NOT run, built or redistributed by the spine. rewire/simmobility.mid_term/adapter.py exports
+  Silver roads/districts/buildings/plots into SimMobility's supply CSV layout (+ id_bridge rows) and publishes the
+  external run's subtrip_metrics.csv / link_travel_time.csv back into Gold keyed by district_id / road_id.
+upstream:
+  repo: tetratorus/simmobility-prod
+  license: "SimMobility Version Control License (license.txt; MIT 2017; non-commercial use only, no commercial sale)"
+  commercial_use: restricted
+  notes: >
+    Free for non-commercial use only; the Standard Version or any Package cannot be commercially sold and other
+    commercial use needs a separate licence from MIT/SMART. The spine does not package, vendor or redistribute
+    SimMobility binaries, sources or data: operators clone/build it themselves under its own licence.
+runtime:
+  type: external
+  notes: >
+    (1) python rewire/simmobility.mid_term/adapter.py export --lake $SPINE_LAKE --out supply/ [--scenario S]
+    [--write-bridge]  -> node/link/link_polyline/segment/segment_polyline/taz/node_taz_map/address/
+    postcode_node_map/id_bridge CSVs in EPSG:32648 (UTM 48N).
+    (2) Build SimMobility (dev/Basic, CMake, Boost/libpq/Lua/XercesC, Linux) and generate lanes, lane connectors and
+    turning groups from those CSVs with the upstream tooling (dev/tools/roadNetworkFromOpenStreetMap_Python3.6,
+    uploadToDb.py), load them and the population/preday inputs into the SimMobility PostgreSQL schema, set the
+    stored-procedure map in data/simrun_MidTerm.xml and DB credentials in data/simulation.xml (credential files,
+    never committed), then run `SimMobility_Medium data/simulation.xml data/simrun_MidTerm.xml` on a Linux/HPC host.
+    (3) python rewire/simmobility.mid_term/adapter.py publish --lake $SPINE_LAKE --sim-output <run dir with
+    subtrip_metrics.csv, link_travel_time.csv> [--scenario S]  -> Gold via Write-Audit-Publish + _lineage.json.
+inputs:
+  - {name: roads, source: "silver:roads", columns: [road_id, geometry, road_class, name]}
+  - {name: districts, source: "silver:districts", columns: [district_id, geometry]}
+  - {name: buildings, source: "silver:buildings", columns: [building_id, geometry], optional: true}
+  - {name: plots, source: "silver:plots", columns: [plot_id, geometry], optional: true}
+  - {name: id_bridge, source: "silver:id_bridge", optional: true}
+parameters:
+  type: object
+  properties:
+    simmobility_crs: {type: string, default: "EPSG:32648", description: "CRS of the exported supply CSVs"}
+    node_snap_m: {type: number, default: 0.5, minimum: 0, description: "road end-points closer than this share a node"}
+    two_way: {type: boolean, default: true, description: "emit a reverse link per road (Silver roads carry no oneway)"}
+    accessibility_threshold_min: {type: number, default: 45.0, minimum: 0}
+outputs:
+  - name: district_trips
+    key: [district_id, mode, direction]
+    columns:
+      - {name: district_id, type: string}
+      - {name: mode, type: string, description: "SimMobility travel mode; ALL = every mode"}
+      - {name: direction, type: string, description: "origin | destination: which trip-end TAZ maps to district_id"}
+      - {name: subtrips, type: int}
+      - {name: mean_travel_time_min, type: float, unit: min, description: "TravelMetric.travelTime (hours) x 60"}
+      - {name: mean_distance_km, type: float, unit: km}
+  - name: district_accessibility
+    key: [district_id]
+    columns:
+      - {name: district_id, type: string}
+      - {name: trips, type: int, description: "trips originating in district_id"}
+      - {name: mean_trip_time_min, type: float, unit: min, description: "sum of subtrip travel times per trip"}
+      - {name: share_within_threshold, type: float, unit: "1"}
+      - {name: reachable_districts, type: int, description: "destination districts with mean OD trip time <= threshold"}
+      - {name: threshold_min, type: float, unit: min}
+  - name: road_travel_times
+    key: [link_id, start_time]
+    columns:
+      - {name: road_id, type: string}
+      - {name: link_id, type: int, description: "SimMobility link id (see id_bridge simmobility.link)"}
+      - {name: start_time, type: string, description: "HH:MM:SS interval start"}
+      - {name: end_time, type: string}
+      - {name: travel_time_s, type: float, unit: s, description: "mean over downstream links"}
+      - {name: downstream_links, type: int}
+readiness:
+  level: 3
+  evidence:
+    - "spine validate passes for this descriptor"
+    - "adapter.nearest_valid_node reproduces the upstream's own reference postcode->node map (Build/Postcode_To_Node/postcode_to_nereastnode.csv): 2847/2847 Jurong East postcodes exact (frozen fixture golden/postcode_to_node_jurong) and 125,327/126,358 (99.18%) island-wide; every mismatch is a reference node that the checked-in node_to_zone.csv marks as excluded"
+    - "rewire/tests (pytest): export of a Singapore SVY21 fixture to SimMobility supply CSVs, EPSG:3414->32648 round trip < 1 mm, stable link/TAZ IDs via id_bridge, scenario exports writing id_bridge only as a scenario overlay (baseline untouched), parsing of subtrip_metrics.csv / link_travel_time.csv in the formats written by Person.cpp / TravelTimeManager.cpp, and Write-Audit-Publish + lineage into a temp lake"
+  gaps:
+    - "SimMobility itself was NOT built or run here: needs a Linux C++ toolchain + Boost/libpq/Lua/XercesC, a PostgreSQL schema with SimMobility stored procedures, and licensed SG population/preday inputs not in the repo"
+    - "No golden from a real Mid-Term run: Gold outputs are tested only on hand-written files in the upstream output formats"
+    - "Export emits node/link/segment(+polylines), zones and addresses only; lanes, lane connectors, turning groups and PT stops must come from upstream tooling or the upstream SG network"
+    - "Silver roads have no lanes/oneway/speed attributes; upstream defaults (1 lane, 1000 veh/h, highway-tag speeds) are used"
+    - "Silver buildings have no postcode: address_id doubles as SimMobility's integer postcode; bridging the upstream SG TAZ/postcode IDs to spine districts needs the upstream zone polygons (not in repo)"
+    - "Units of subtrip travel_time (hours, TravelMetric::getTimeDiffHours) and total_distance (metres, summed polyline lengths) read from the upstream source, not observed in a run"
