@@ -205,3 +205,70 @@ def test_cli_export_writes_csvs_and_bridge(tmp_path):
               "postcode_node_map", "id_bridge"):
         assert (tmp_path / "supply" / f"{f}.csv").exists()
     assert lake.silver_read("id_bridge").source.str.startswith("simmobility.").all()
+
+
+def _link_rows(bridge):
+    return bridge[bridge.source == "simmobility.link"]
+
+
+def test_cli_export_scenario_bridge_stays_in_scenario(tmp_path):
+    """--scenario S --write-bridge must overlay id_bridge in S only (LAYERS.md Scenarios row), never touch baseline."""
+    from spine.lake import Lake
+
+    lake = Lake(tmp_path / "lake")
+    s = silver_fixture()
+    for k, v in s.items():
+        lake.silver_write(k, v)
+    assert A.main(["export", "--lake", str(lake.root), "--out", str(tmp_path / "base"), "--write-bridge"]) == 0
+    base_before = lake.silver_read("id_bridge").sort_values(["source", "source_id"]).reset_index(drop=True)
+    assert len(_link_rows(base_before)) == 6
+
+    lake.scenario_create("new_road", description="adds RNEW, removes R3")
+    new = gpd.GeoDataFrame({"road_id": ["RNEW"], "road_class": ["secondary"], "name": ["New Rd"],
+                            "source_version": "osm-2026-11",
+                            "geometry": [LineString([(16500, 35000), (17000, 35000)])]}, crs="EPSG:3414")
+    lake.scenario_set("new_road", "roads", new)
+    lake.scenario_set("new_road", "roads", pd.DataFrame({"road_id": ["R3"], "_deleted": [True]}))
+    assert A.main(["export", "--lake", str(lake.root), "--out", str(tmp_path / "scen"), "--scenario", "new_road",
+                   "--write-bridge"]) == 0
+
+    base_after = lake.silver_read("id_bridge").sort_values(["source", "source_id"]).reset_index(drop=True)
+    pd.testing.assert_frame_equal(base_before, base_after)
+    assert "RNEW" not in set(base_after.hub_id)
+
+    scen = lake.silver_read("id_bridge", "new_road")
+    links = _link_rows(scen).groupby("hub_id").source_id.apply(set).to_dict()
+    base_links = _link_rows(base_before).groupby("hub_id").source_id.apply(set).to_dict()
+    assert set(links) == {"R1", "R2", "RNEW"}  # R3 rows are deleted in the scenario overlay only
+    assert links["R1"] == base_links["R1"] and links["R2"] == base_links["R2"]
+    assert links["RNEW"].isdisjoint(set().union(*base_links.values()))
+    exported = pd.read_csv(tmp_path / "scen" / "id_bridge.csv", dtype=str)
+    assert set(map(tuple, scen[["source", "source_id"]].astype(str).to_numpy())) >= \
+        set(map(tuple, exported[["source", "source_id"]].to_numpy()))
+    assert not scen.duplicated(["source", "source_id"]).any()
+
+    # re-export is idempotent and publish for the scenario resolves against the scenario bridge
+    assert A.main(["export", "--lake", str(lake.root), "--out", str(tmp_path / "scen2"), "--scenario", "new_road",
+                   "--write-bridge"]) == 0
+    assert _link_rows(lake.silver_read("id_bridge", "new_road")).groupby("hub_id").source_id.apply(set).to_dict() == links
+    sim = tmp_path / "run_s"
+    sim.mkdir()
+    rnew_link = min(int(i) for i in links["RNEW"])
+    (sim / "subtrip_metrics.csv").write_text("")
+    (sim / "link_travel_time.csv").write_text(f"{rnew_link};{rnew_link};08:00:00;08:04:59;30\n")
+    A.main(["publish", "--lake", str(lake.root), "--sim-output", str(sim), "--scenario", "new_road"])
+    rt = lake.gold_read("simmobility.mid_term", "road_travel_times", "new_road")
+    assert set(rt.road_id) == {"RNEW"}
+    assert not (lake.gold_dir("baseline", "simmobility.mid_term")).exists()
+
+
+def test_cli_export_scenario_bridge_needs_baseline_bridge(tmp_path):
+    from spine.lake import Lake
+
+    lake = Lake(tmp_path / "lake")
+    for k, v in silver_fixture().items():
+        lake.silver_write(k, v)
+    lake.scenario_create("s1")
+    with pytest.raises(FileNotFoundError, match="baseline"):
+        A.main(["export", "--lake", str(lake.root), "--out", str(tmp_path / "o"), "--scenario", "s1", "--write-bridge"])
+    assert not lake.silver_path("id_bridge").exists()

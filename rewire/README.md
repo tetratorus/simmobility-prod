@@ -1,7 +1,7 @@
 # rewire/ — SimMobility Mid-Term on the sg-urban-spine
 
 "Rewire, don't rewrite": this directory plugs SimMobility Mid-Term into
-[sg-urban-spine](https://github.com/tetratorus/sg-urban-spine) as **descriptor + mapping only**. No SimMobility
+[sg-urban-spine](https://github.com/tetratorus/saas-middleware/tree/sg-urban-spine) as **descriptor + mapping only**. No SimMobility
 source file was changed, and SimMobility is not built, run, packaged or redistributed by the spine.
 
 ```
@@ -32,7 +32,7 @@ credentials (`dev/Basic/data/simulation.xml` credential files — never commit t
 inputs that are not in this repo. So `spine run simmobility.mid_term` raises `NotRunnable` by design; the three steps are:
 
 ```bash
-pip install 'git+https://github.com/tetratorus/sg-urban-spine@main' geopandas
+pip install 'git+https://github.com/tetratorus/saas-middleware@sg-urban-spine' geopandas
 # 1. Silver -> SimMobility supply CSVs (EPSG:32648) + id_bridge rows
 python rewire/simmobility.mid_term/adapter.py export --lake $SPINE_LAKE --out supply/ [--scenario S] [--write-bridge]
 # 2. operator: generate lanes/connectors/turning groups with dev/tools/roadNetworkFromOpenStreetMap_Python3.6,
@@ -40,6 +40,11 @@ python rewire/simmobility.mid_term/adapter.py export --lake $SPINE_LAKE --out su
 # 3. SimMobility outputs -> Gold (Write-Audit-Publish + OpenLineage _lineage.json, like `spine run`)
 python rewire/simmobility.mid_term/adapter.py publish --lake $SPINE_LAKE --sim-output <run dir> [--scenario S]
 ```
+
+With `--scenario S`, export reads scenario-overlaid Silver and `--write-bridge` writes the `simmobility.*` id_bridge
+rows as an overlay in `scenarios/S/silver/id_bridge.parquet` (`Lake.scenario_set`): new rows upserted, rows for roads
+the scenario removed marked deleted. Baseline Silver is only written when no scenario is given; a scenario export
+needs a baseline id_bridge to exist first so link/TAZ IDs of unchanged roads stay the same as in baseline.
 
 ### Silver -> SimMobility (export)
 
@@ -65,7 +70,7 @@ trip); nothing is silently assumed to be the same grid. Override with `simmobili
 |---|---|---|
 | `subtrip_metrics.csv` (`Person::serializeSubTripChainItemTravelTimeMetrics`) | `district_trips` (`district_id, mode, direction`) | origin/destination TAZ -> district via id_bridge; `travel_time` is hours (`TravelMetric::getTimeDiffHours`) -> minutes; distance m -> km; `mode=ALL` row per district |
 | same | `district_accessibility` (`district_id`) | per origin district: trips, mean trip time (sum of subtrip times), share within `accessibility_threshold_min`, destination districts reachable within it |
-| `link_travel_time.csv` (`LinkTravelTime::dumpTravelTimesToFile`, `;`-separated, seconds) | `road_travel_times` (`link_id, start_time`) | mean over downstream links, `road_id` via id_bridge |
+| `link_travel_time.csv` (`LinkTravelTime::dumpTravelTimesToFile`, `;`-separated, seconds) | `road_travel_times` (`link_id, start_time`) | mean over downstream links, `road_id` via id_bridge. Keyed by `link_id`, not `road_id`: a two-way Silver road becomes two directional SimMobility links with different travel times, so `road_id` is a non-unique join column |
 
 ## id_bridge plan (GERS pattern — no new hub keys)
 
@@ -85,7 +90,7 @@ source_version`); the spine hubs stay `road`/`district`/`building`/`plot`/`stati
 ## Tests and golden
 
 ```bash
-pip install 'git+https://github.com/tetratorus/sg-urban-spine@main' geopandas pytest
+pip install 'git+https://github.com/tetratorus/saas-middleware@sg-urban-spine' geopandas pytest
 spine validate rewire/simmobility.mid_term/transform.yaml
 pytest rewire/tests
 ```
@@ -101,8 +106,8 @@ formats.
 
 ## Readiness (NOAA RL 3)
 
-What was run: `spine validate`; pytest (export, CRS, id_bridge, ID stability, output parsing, Write-Audit-Publish +
-lineage); the postcode->node comparison against upstream reference data. What was **not** run: building or running
+What was run: `spine validate`; pytest (export, CRS, id_bridge, ID stability, scenario-isolated id_bridge
+writes, output parsing, Write-Audit-Publish + lineage); the postcode->node comparison against upstream reference data. What was **not** run: building or running
 SimMobility, any database load, any real Mid-Term output. See `readiness.gaps` in `transform.yaml`.
 
 ## Upstream changes

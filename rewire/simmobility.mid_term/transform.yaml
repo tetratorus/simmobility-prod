@@ -75,7 +75,7 @@ readiness:
   evidence:
     - "spine validate passes for this descriptor"
     - "adapter.nearest_valid_node reproduces the upstream's own reference postcode->node map (Build/Postcode_To_Node/postcode_to_nereastnode.csv): 2847/2847 Jurong East postcodes exact (frozen fixture golden/postcode_to_node_jurong) and 125,327/126,358 (99.18%) island-wide; every mismatch is a reference node that the checked-in node_to_zone.csv marks as excluded"
-    - "rewire/tests (pytest): export of a Singapore SVY21 fixture to SimMobility supply CSVs, EPSG:3414->32648 round trip < 1 mm, stable link/TAZ IDs via id_bridge, parsing of subtrip_metrics.csv / link_travel_time.csv in the formats written by Person.cpp / TravelTimeManager.cpp, and Write-Audit-Publish + lineage into a temp lake"
+    - "rewire/tests (pytest): export of a Singapore SVY21 fixture to SimMobility supply CSVs, EPSG:3414->32648 round trip < 1 mm, stable link/TAZ IDs via id_bridge, scenario exports writing id_bridge only as a scenario overlay (baseline untouched), parsing of subtrip_metrics.csv / link_travel_time.csv in the formats written by Person.cpp / TravelTimeManager.cpp, and Write-Audit-Publish + lineage into a temp lake"
   gaps:
     - "SimMobility itself was NOT built or run here: needs a Linux C++ toolchain + Boost/libpq/Lua/XercesC, a PostgreSQL schema with SimMobility stored procedures, and licensed SG population/preday inputs not in the repo"
     - "No golden from a real Mid-Term run: Gold outputs are tested only on hand-written files in the upstream output formats"

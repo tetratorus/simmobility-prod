@@ -354,6 +354,23 @@ def _silver(lake, name, scenario):
         return None
 
 
+def write_bridge(lake, rows: pd.DataFrame, scenario: str = "baseline") -> Path:
+    """Replace the simmobility.* rows of Silver id_bridge in `scenario` only. Baseline is rewritten in place; any other
+    scenario gets an overlay (new/changed rows upserted, simmobility.* rows it no longer produces marked deleted), so
+    a scenario export never leaks into baseline or sibling scenarios."""
+    old = _silver(lake, "id_bridge", scenario)
+    ours = old.source.str.startswith(f"{SRC}.") if old is not None else None
+    if scenario == "baseline":
+        return lake.silver_write("id_bridge", pd.concat([None if old is None else old[~ours], rows], ignore_index=True))
+    if old is None:
+        raise FileNotFoundError(f"scenario '{scenario}' has no id_bridge to overlay; materialise baseline Silver "
+                                "id_bridge first (e.g. `export --write-bridge` without --scenario)")
+    key = ["source", "source_id"]
+    stale = old[ours & ~old.set_index(key).index.isin(rows.set_index(key).index)]
+    overlay = pd.concat([rows.assign(_deleted=False), stale.assign(_deleted=True)], ignore_index=True)
+    return lake.scenario_set(scenario, "id_bridge", overlay)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="simmobility.mid_term adapter")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -375,9 +392,7 @@ def main(argv=None) -> int:
         tables = export_supply({n: _silver(lake, n, a.scenario) for n in names})
         write_supply(tables, a.out)
         if a.write_bridge:
-            old = _silver(lake, "id_bridge", "baseline")
-            keep = old[~old.source.str.startswith(f"{SRC}.")] if old is not None else None
-            lake.silver_write("id_bridge", pd.concat([keep, tables["id_bridge"]], ignore_index=True))
+            write_bridge(lake, tables["id_bridge"], a.scenario)
         print(json.dumps({k: len(v) for k, v in tables.items()}))
     else:
         print(json.dumps(publish(a.lake, a.sim_output, a.scenario)["run"], default=str))
